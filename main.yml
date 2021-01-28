@@ -1,0 +1,278 @@
+- hosts: localhost
+  connection: local
+  gather_facts: False
+  vars_files: 
+         - variables/aws_var.yml
+         - credentials.yml
+  tasks:
+          - name: "Install python"
+            package:
+                    name: python3
+                    state: present
+
+          - name: "Install required libraries"
+            pip:
+                  name: "{{ item }}"
+            loop:
+                    - boto 
+                    - boto3
+                    - botocore
+
+
+          - name: "Create VPC in AWS"
+            ec2_vpc_net:
+                    aws_access_key: "{{ aws_access_key }}"
+                    aws_secret_key: "{{ aws_secret_key }}"
+                    name: "{{ vpc_name }}"
+                    cidr_block: "{{ vpc_cidr }}"
+                    region: "{{ region }}"
+                    state: present
+                    tags:
+                            service: vpc
+            register: vpc
+
+      
+
+          - name: "Create Subnet"
+            ec2_vpc_subnet:
+                    aws_access_key: "{{ aws_access_key }}"
+                    aws_secret_key: "{{ aws_secret_key }}"
+                    az: "{{ subnet_az }}"
+                    cidr: "{{ subnet_cidr }}"
+                    state: present
+                    region: "{{ region }}"
+                    tags:
+                            name: "{{ subnet_name }}"
+                    map_public: yes
+                    vpc_id: "{{ vpc.vpc.id }}"
+            
+            register: subnet
+
+
+          - name: "Create Internet Gateway"
+            ec2_vpc_igw:
+                    aws_access_key: "{{ aws_access_key }}"
+                    aws_secret_key: "{{ aws_secret_key }}"
+                    region: "{{ region }}"
+                    vpc_id: "{{ vpc.vpc.id }}"
+                    tags:
+                            name: "{{ ig_name }}"
+            register: igw
+
+
+          - name: "create route tables for route traffic to Internet Gateway"
+            ec2_vpc_route_table:
+                     aws_access_key: "{{ aws_access_key }}"
+                     aws_secret_key: "{{ aws_secret_key }}"
+                     region: "{{ region }}"
+                     vpc_id: "{{ vpc.vpc.id }}"
+                     tags:
+                             name: "{{ routetable_name }}"
+                     routes:
+                             - dest: 0.0.0.0/0
+                               gateway_id: "{{ igw.gateway_id }}"
+                     subnets: "{{ subnet.subnet.id }}"
+            register: routetable
+
+          - name: "Create Security group for frontend_lb"
+            ec2_group:
+                     aws_access_key: "{{ aws_access_key }}"
+                     aws_secret_key: "{{ aws_secret_key }}"
+                     name: "{{ sg_name_frontend }}"
+                     region: "{{ region }}"
+                     description: "{{ sg_desc_frontend }}"
+                     tags:
+                             service: mysg
+                     state: present
+                     vpc_id: "{{ vpc.vpc.id }}"
+                     rules:
+                             - proto: "{{ sg_protocol_1 }}"
+                               ports:
+                                       - "{{ sg_port_1 }}"
+                               cidr_ip: "{{ sg_ip_1 }}"
+                               rule_desc: "Rules to allow the {{ sg_port_1 }} port number"
+
+                             - proto: "{{ sg_protocol_2 }}"
+                               ports:
+                                       - "{{ sg_port_2 }}"
+                               cidr_ip: "{{ sg_ip_2 }}"
+                               rule_desc: "Rules to allow the {{ sg_port_2 }} port number"
+
+            register: security_group_frontend
+           
+          - name: "Create Security group for backend_lb"
+            ec2_group:
+                     aws_access_key: "{{ aws_access_key }}"
+                     aws_secret_key: "{{ aws_secret_key }}"
+                     name: "{{ sg_name_backend }}"
+                     region: "{{ region }}"
+                     description: "{{ sg_desc_backend }}"
+                     tags:
+                             service: mysg
+                     state: present
+                     vpc_id: "{{ vpc.vpc.id }}"
+                     rules:
+                             - proto: "{{ sg_protocol_3 }}"
+                               ports:
+                                       - "{{ sg_port_3 }}"
+                               cidr_ip: "{{ sg_ip_3 }}"
+                               rule_desc: "Rules to allow the {{ sg_port_3 }} port number"
+
+                             - proto: "{{ sg_protocol_2 }}"
+                               ports:
+                                       - "{{ sg_port_2 }}"
+                               cidr_ip: "{{ sg_ip_2 }}"
+                               rule_desc: "Rules to allow the {{ sg_port_2 }} port number"
+
+            register: security_group_backend
+
+          - name: "Create Key Pair"
+            ec2_key:
+                    aws_access_key: "{{ aws_access_key }}"
+                    aws_secret_key: "{{ aws_secret_key }}"
+                    name: "{{ key_name }}"
+                    region: "{{ region }}"
+                    state: present
+            register: key_pair
+            ignore_errors: yes
+
+          - name: "Copy the key-pair locally so that it can be used to do SSH in EC2 instances"
+            copy:
+                   content: "{{ key_pair.key.private_key }}"
+                   dest: "{{ ec2_key_location }}{{ key_name }}.pem"
+            when: 
+                   key_pair.changed == true
+            register:
+                    local
+
+          - name: "change the mode of private key"
+            file:
+                    path: "{{ ec2_key_location }}{{ key_name }}.pem"
+                    mode: '0400'
+            when: 
+                   local.changed == true
+
+
+          - name: "Launched The EC2 instances, here I am launching  one for front-end lb"
+            ec2:
+                   aws_access_key: "{{ aws_access_key }}"
+                   aws_secret_key: "{{ aws_secret_key }}"
+                   image: "{{ ec2_ami }}"
+                   instance_type: "{{ ec2_instance_type }}"
+                   key_name: "{{ key_name }}"
+                   region: "{{ region }}"
+                   count: "{{ count_frontendlb }}" 
+                   group_id: "{{ security_group_frontend.group_id }}"
+                   vpc_subnet_id: "{{ subnet.subnet.id }}"
+                   assign_public_ip: yes
+                   instance_tags:
+                           purpose: front_end_lb
+                   state: present
+                   wait: yes
+            register: ec2_frontend
+
+          - name: "Launched The EC2 instances, here I am launching  two for back-end lb"
+            ec2:
+                   aws_access_key: "{{ aws_access_key }}"
+                   aws_secret_key: "{{ aws_secret_key }}"
+                   image: "{{ ec2_ami }}"
+                   instance_type: "{{ ec2_instance_type }}"
+                   key_name: "{{ key_name }}"
+                   region: "{{ region }}"
+                   count: "{{ count_backendlb }}"
+                   group_id: "{{ security_group_backend.group_id }}"
+                   vpc_subnet_id: "{{ subnet.subnet.id }}"
+                   assign_public_ip: yes
+                   instance_tags:
+                           purpose: back_end_lb
+                   state: present
+                   wait: yes
+            register: ec2_backend
+           
+
+  
+
+
+          - name: "Add frontend ec2 instances public IP to host"
+            add_host:
+                    hostname: "{{ item.public_ip }}"
+                    groupname: frontend_lb
+            loop: '{{ ec2_frontend.instances }}'
+
+          - name: "Add frontend ec2 instances public IP to host"
+            add_host:
+                    hostname: "{{ item.public_ip }}"
+                    groupname: backend_lb
+            loop: '{{ ec2_backend.instances }}'
+
+
+           
+           
+         
+
+- hosts: frontend_lb
+  gather_facts: false
+  vars_files: variables/haproxy_var.yml
+  tasks:
+          - name: "get the variables from previous hosts/play"
+            set_fact:
+                    frontend_lb: "{{ hostvars['localhost']['ec2_frontend'] }}"
+                   
+
+          - name: "SSH into the front_end ec2 instances"
+            wait_for:
+                    host: "{{ item.public_dns_name }}"
+                    port: 22
+                    state: started
+            loop: "{{ frontend_lb.instances }}"
+           
+          - name: "Install haproxy softwares"
+            package:
+                    name: haproxy
+                    state: present
+
+          - name: "Copy the configuration file"
+            template:
+                    src: "{{ lb_config_location }}"
+                    dest: /etc/haproxy/
+
+          - name: "Start the service"
+            service:
+                    name: haproxy
+                    state: started
+
+
+- hosts: backend_lb
+  gather_facts: false
+  vars_files: variables/haproxy_var.yml
+  tasks:
+          - name: "SSH into the back_end ec2 instances"
+            wait_for:
+                    host: "{{ item.public_dns_name }}"
+                    port: 22
+                    state: started
+            loop: "{{ hostvars['localhost']['ec2_backend'].instances }}"
+        
+          - name: "Install httpd software"
+            package:
+                    name: "{{ item }}"
+                    state: present
+            loop:
+                    - httpd
+                    - php
+
+          - name: "Copy the content for web server"
+            copy:
+                    src: "{{ content_location }}"
+                    dest: /var/www/html
+
+          - name: "Start the service"
+            service:
+                    name: httpd
+                    state: started
+
+      
+
+
+                  
+             

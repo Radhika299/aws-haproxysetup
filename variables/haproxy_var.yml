@@ -1,0 +1,4 @@
+lb_config_location: /ansible/aws/datafiles/haproxy.cfg
+content_location: /ansible/aws/datafiles/index.php
+portnumber: 7000
+web_portnumber: 80

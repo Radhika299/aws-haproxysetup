@@ -1,0 +1,57 @@
+
+#region
+region: "ap-south-1"
+
+#VPC
+vpc_name: "vpc1"
+vpc_cidr: 192.168.20.0/24
+
+#Subnet
+subnet_name : "subnet1"
+subnet_cidr: 192.168.20.0/28
+subnet_az: "ap-south-1a"
+
+
+#Internet gateway
+ig_name: "IG1"
+
+
+#SecurityGroup
+sg_name_frontend: "sg_frontend"
+sg_desc_frontend: "This is security group for front end load balancer"
+
+sg_name_backend: "sg_backend"
+sg_desc_backend: "This is security group for back end load balancer"
+
+
+#SecurityGrouprules
+#firstrule
+sg_protocol_1: "tcp" 
+sg_port_1: 7000
+sg_ip_1: 0.0.0.0/0
+
+#second rules
+sg_protocol_2: "tcp" 
+sg_port_2: 22
+sg_ip_2: 0.0.0.0/0
+
+#Third rule
+sg_protocol_3: "tcp" 
+sg_port_3: 80
+sg_ip_3: 0.0.0.0/0
+
+
+#routingtable
+routetable_name: "rt1"
+
+#keypairs
+key_name: "key2"
+ec2_key_location: "/ansible/aws/"
+
+
+#ec2_instance
+ec2_ami: "ami-04b1ddd35fd71475a"
+ec2_instance_type: "t2.micro"
+count_frontendlb: 1
+count_backendlb: 2
+
